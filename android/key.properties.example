@@ -1,0 +1,6 @@
+# انسخ هذا الملف إلى android/key.properties واملأ القيم محلياً.
+# لا ترفع key.properties أو ملف keystore إلى Git أو تشاركهما داخل ZIP.
+storeFile=path/to/your-release-key.jks
+storePassword=CHANGE_ME
+keyAlias=CHANGE_ME
+keyPassword=CHANGE_ME
