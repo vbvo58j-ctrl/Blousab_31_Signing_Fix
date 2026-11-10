@@ -1,0 +1,124 @@
+plugins {
+    id "com.android.application"
+    id "kotlin-android"
+    id "dev.flutter.flutter-gradle-plugin"
+}
+
+def localProperties = new Properties()
+def localPropertiesFile = rootProject.file("local.properties")
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.withReader("UTF-8") { reader ->
+        localProperties.load(reader)
+    }
+}
+
+def flutterVersionCode = localProperties.getProperty("flutter.versionCode")
+if (flutterVersionCode == null) {
+    flutterVersionCode = "1"
+}
+
+def flutterVersionName = localProperties.getProperty("flutter.versionName")
+if (flutterVersionName == null) {
+    flutterVersionName = "1.0"
+}
+
+// Release signing is optional for CI/test builds. If a private signing file is
+// present and complete, use it; otherwise produce an installable debug-signed
+// release APK instead of failing during Gradle configuration.
+def releaseKeyProps = new Properties()
+def releaseKeyPropsFile = rootProject.file("key.properties")
+if (releaseKeyPropsFile.exists()) {
+    releaseKeyPropsFile.withReader("UTF-8") { reader -> releaseKeyProps.load(reader) }
+}
+def releaseStorePath = releaseKeyProps.getProperty("storeFile")
+def releaseStorePassword = releaseKeyProps.getProperty("storePassword")
+def releaseKeyAlias = releaseKeyProps.getProperty("keyAlias")
+def releaseKeyPassword = releaseKeyProps.getProperty("keyPassword")
+def releaseStoreFile = releaseStorePath ? file(releaseStorePath) : null
+def hasReleaseSigning = releaseStoreFile != null && releaseStoreFile.isFile() &&
+        [releaseStorePassword, releaseKeyAlias, releaseKeyPassword].every { it != null && !it.trim().isEmpty() }
+
+android {
+    namespace = "com.plosap.myapp"
+    compileSdk = 36
+    // Use a stable NDK version instead of Flutter auto-selecting NDK 28.2.13676358.
+    ndkVersion = "28.2.13676358"
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+        coreLibraryDesugaringEnabled true
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
+    defaultConfig {
+        applicationId = "com.plosap.myapp"
+        minSdk = 24
+        targetSdk = 35
+        // رقم إصدار يزداد تلقائياً مع كل بناء (دقائق منذ 1970، أكبر دائماً من أي بناء سابق) فلا يُرفض التحديث كنسخة أقدم.
+        versionCode = Math.max(flutterVersionCode.toInteger(), (int) (System.currentTimeMillis().intdiv(60000L)))
+        versionName = flutterVersionName
+    }
+
+    // لا تُضمّن مفاتيح التوقيع أو كلمات المرور داخل مستودع المصدر.
+    // عند توفير android/key.properties مع ملف keystore صالح نستخدم توقيع الإصدار.
+    signingConfigs {
+        release {
+            if (hasReleaseSigning) {
+                storeFile = releaseStoreFile
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            // Fallback آمن للبناء التجريبي في CI/IDE. ليس توقيع متجر دائم.
+            signingConfig = hasReleaseSigning ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+}
+
+flutter {
+    source = "../.."
+}
+
+dependencies {
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'
+}
+
+// فحص تلقائي لتوقيع الـAPK بعد كل بناء Release، ويُطبع في سجل البناء (ابحث عن BLOUSAB-VERIFY).
+afterEvaluate {
+    tasks.matching { it.name == "assembleRelease" }.configureEach { t ->
+        t.doLast {
+            try {
+                def sdkRoot = System.getenv("ANDROID_HOME") ?: System.getenv("ANDROID_SDK_ROOT") ?: "/usr/local/lib/android/sdk"
+                def btDir = new File(sdkRoot, "build-tools")
+                def signer = btDir.listFiles()?.sort { it.name }?.reverse()?.collect { new File(it, "apksigner") }?.find { it.exists() }
+                def apks = fileTree(dir: buildDir, include: "outputs/apk/release/*.apk").files
+                if (signer == null || apks.isEmpty()) {
+                    println "[BLOUSAB-VERIFY] skipped (apksigner or apk not found)"
+                } else {
+                    apks.each { apk ->
+                        def out = new ByteArrayOutputStream()
+                        def res = project.exec {
+                            commandLine signer.absolutePath, "verify", "--verbose", "--print-certs", apk.absolutePath
+                            standardOutput = out
+                            errorOutput = out
+                            ignoreExitValue = true
+                        }
+                        println "[BLOUSAB-VERIFY] ${apk.name} size=${apk.length()} exit=${res.exitValue}"
+                        println out.toString().readLines().findAll { it.contains("Verifies") || it.contains("Verified") || it.contains("SHA-256") || it.contains("ERROR") || it.contains("WARNING") }.take(14).join("\n")
+                    }
+                }
+            } catch (Throwable e) {
+                println "[BLOUSAB-VERIFY] check failed to run: ${e}"
+            }
+        }
+    }
+}
